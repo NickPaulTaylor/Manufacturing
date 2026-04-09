@@ -5,61 +5,70 @@
 # --- RSS Sources -------------------------------------------------------------
 RSS_SOURCES = [
     # Newswires
+    # GlobeNewswire industry feeds use /RssFeed/industrycode/NUMBER-Name format
     {
         "name": "GlobeNewswire (Pharma)",
-        "url": "https://www.globenewswire.com/RssFeed/industry/Pharmaceuticals",
+        "url": "https://www.globenewswire.com/RssFeed/industrycode/37-Pharmaceuticals/feedTitle/GlobeNewswire%20-%20Pharmaceuticals",
         "type": "newswire",
     },
     {
         "name": "GlobeNewswire (Biotech)",
-        "url": "https://www.globenewswire.com/RssFeed/industry/Biotechnology",
+        "url": "https://www.globenewswire.com/RssFeed/industrycode/6-Biotechnology/feedTitle/GlobeNewswire%20-%20Biotechnology",
         "type": "newswire",
     },
+    # BusinessWire industry RSS — correct URL format per their feed docs
     {
         "name": "BusinessWire (Pharma)",
-        "url": "https://feed.businesswire.com/rss/home/?rss=G22&rssid=20",
+        "url": "https://www.businesswire.com/rss/home/?rss=G7&rssid=20",
         "type": "newswire",
     },
     {
         "name": "BusinessWire (Biotech)",
-        "url": "https://feed.businesswire.com/rss/home/?rss=G22&rssid=21",
+        "url": "https://www.businesswire.com/rss/home/?rss=G7&rssid=21",
         "type": "newswire",
     },
-    # FDA
+    # FDA — correct paths as of 2025
     {
         "name": "FDA Press Announcements",
-        "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-announcements/rss.xml",
+        "url": "https://www.fda.gov/about-fda/stay-informed/rss-feeds/press-announcements/rss.xml",
         "type": "regulatory",
     },
     {
         "name": "FDA Warning Letters",
-        "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/warning-letters/rss.xml",
+        "url": "https://www.fda.gov/about-fda/stay-informed/rss-feeds/warning-letters/rss.xml",
         "type": "regulatory",
     },
     {
-        "name": "FDA Drug Shortages",
-        "url": "https://www.accessdata.fda.gov/scripts/drugshortages/dsp_ActiveIngredientDetails.cfm?rss=true",
+        "name": "FDA MedWatch Safety Alerts",
+        "url": "https://www.fda.gov/about-fda/stay-informed/rss-feeds/medwatch-safety-alerts/rss.xml",
         "type": "regulatory",
     },
-    # Trade publications
+    # Trade publications — only open feeds included (403-blocked sites removed)
     {
         "name": "BioPharma Dive",
         "url": "https://www.biopharmadive.com/feeds/news/",
         "type": "trade",
     },
     {
-        "name": "Contract Pharma",
-        "url": "https://www.contractpharma.com/rss/articles",
-        "type": "trade",
-    },
-    {
-        "name": "Pharmaceutical Technology",
-        "url": "https://www.pharmtech.com/rss/articles",
-        "type": "trade",
-    },
-    {
         "name": "Fierce Pharma",
         "url": "https://www.fiercepharma.com/rss/xml",
+        "type": "trade",
+    },
+    {
+        "name": "Fierce Biotech",
+        "url": "https://www.fiercebiotech.com/rss/xml",
+        "type": "trade",
+    },
+    # GEN (Genetic Engineering & Biotechnology News) — strong manufacturing coverage
+    {
+        "name": "GEN (Genetic Engineering News)",
+        "url": "https://www.genengnews.com/feed/",
+        "type": "trade",
+    },
+    # BioWorld — manufacturing and supply chain coverage
+    {
+        "name": "BioWorld",
+        "url": "https://www.bioworld.com/rss/articles",
         "type": "trade",
     },
     # Broad biopharma publications (keyword filtering applied more strictly)
@@ -195,7 +204,7 @@ GEMINI_MODEL = "gemini-2.0-flash-lite"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_BATCH_SIZE = 20       # Articles per LLM call
 GEMINI_RPM_LIMIT = 30        # Free tier: requests per minute
-GEMINI_DELAY_SECONDS = 3     # Pause between batches to stay below rate limit
+GEMINI_DELAY_SECONDS = 10    # Pause between batches to stay below free-tier rate limit
 GEMINI_MIN_SCORE = 3         # Articles scoring below this are excluded (1-5 scale)
 
 # --- Email Settings ----------------------------------------------------------

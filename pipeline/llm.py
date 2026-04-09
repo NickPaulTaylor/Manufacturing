@@ -96,7 +96,10 @@ def score_articles(articles: list[dict]) -> list[dict]:
 
 
 def _score_batch(batch: list[dict], api_key: str) -> list[dict]:
-    """Send one batch to Gemini and parse the JSON response."""
+    """
+    Send one batch to Gemini and parse the JSON response.
+    Retries up to 4 times with exponential backoff on 429 rate-limit errors.
+    """
     items = [
         {
             "index": i,
@@ -129,20 +132,43 @@ def _score_batch(batch: list[dict], api_key: str) -> list[dict]:
 
     url = f"{GEMINI_API_BASE}/{GEMINI_MODEL}:generateContent?key={api_key}"
 
-    try:
-        resp = requests.post(url, json=payload, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        # Strip any accidental markdown fences
-        text = text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        logger.warning(f"Gemini returned unparseable JSON: {exc}. Raw: {text[:300]}")
-        return []
-    except Exception as exc:
-        logger.warning(f"Gemini API call failed: {exc}")
-        return []
+    max_retries = 4
+    for attempt in range(max_retries):
+        try:
+            resp = requests.post(url, json=payload, timeout=60)
+
+            if resp.status_code == 429:
+                # Exponential backoff: 15s, 30s, 60s, 120s
+                wait = 15 * (2 ** attempt)
+                logger.warning(f"Gemini 429 rate limit (attempt {attempt+1}/{max_retries}). Waiting {wait}s...")
+                time.sleep(wait)
+                continue
+
+            resp.raise_for_status()
+            data = resp.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            # Strip any accidental markdown fences
+            text = text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1]  # Remove first line (```json)
+            if text.endswith("```"):
+                text = text.rsplit("\n", 1)[0]  # Remove last line (```)
+            return json.loads(text.strip())
+
+        except json.JSONDecodeError as exc:
+            logger.warning(f"Gemini returned unparseable JSON: {exc}. Raw: {text[:300]}")
+            return []
+        except Exception as exc:
+            if attempt < max_retries - 1:
+                wait = 15 * (2 ** attempt)
+                logger.warning(f"Gemini API error (attempt {attempt+1}): {exc}. Retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                logger.warning(f"Gemini API call failed after {max_retries} attempts: {exc}")
+                return []
+
+    logger.warning("Gemini batch exhausted all retries")
+    return []
 
 
 def _chunk(lst: list, size: int) -> list[list]:
