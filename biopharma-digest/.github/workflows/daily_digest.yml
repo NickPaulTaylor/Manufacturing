@@ -1,0 +1,52 @@
+name: Daily Biopharma Manufacturing Digest
+
+on:
+  schedule:
+    # 7:45 AM UTC daily — digest in inbox before 8am
+    - cron: "45 7 * * *"
+  workflow_dispatch:
+    # Allow manual trigger from the GitHub Actions UI for testing
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # Needed to commit state file and digests back to repo
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run digest pipeline
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python main.py
+
+      - name: Commit digest outputs and updated state
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          # Add files that actually exist — digests/ may be empty if no stories passed
+          git add state/seen_urls.json
+          git add digests/ 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "digest: $(date -u +'%Y-%m-%d')"
+          git push
