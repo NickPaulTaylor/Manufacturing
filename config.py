@@ -38,6 +38,7 @@ RSS_SOURCES = [
     },
     # NOTE: openFDA API (fetchers/openfda.py) supplements these with structured
     # enforcement/recall data not available via RSS.
+
     # Trade publications — only open feeds included (403-blocked sites removed)
     {
         "name": "BioPharma Dive",
@@ -85,7 +86,8 @@ RSS_SOURCES = [
 ]
 
 # --- SEC EDGAR Settings ------------------------------------------------------
-# SIC codes for pharmaceutical/biotech manufacturers
+# SIC codes for pharmaceutical/biotech manufacturers.
+# Used by fetchers/edgar.py to post-filter EFTS results to pharma filers.
 PHARMA_SIC_CODES = [
     "2830",  # Industrial Chemicals and Synthetics
     "2833",  # Pharmaceutical Preparations
@@ -95,21 +97,12 @@ PHARMA_SIC_CODES = [
     "8731",  # Commercial Physical & Biological Research
 ]
 
-# 8-K item types most relevant to manufacturing
-EDGAR_RELEVANT_ITEMS = [
-    "1.01",  # Entry into a Material Definitive Agreement
-    "2.01",  # Completion of Acquisition or Disposition of Assets
-    "7.01",  # Regulation FD Disclosure (press releases)
-    "8.01",  # Other Events
-]
-
 EDGAR_LOOKBACK_HOURS = 26  # Slightly more than a day to avoid missing anything
 
 # --- Keywords ----------------------------------------------------------------
 # Applied to title + summary/description text (case-insensitive)
 # Broad sources (Endpoints, STAT) require a match; trade/regulatory sources
 # are included by default but boosted in LLM scoring if keywords match.
-
 KEYWORDS = [
     # Core manufacturing terms
     "manufacturing",
@@ -186,12 +179,15 @@ KEYWORDS = [
     "collaboration",
 ]
 
-# Minimum keyword matches required by source type
+# Minimum keyword matches required by source type.
+# "edgar" is separate from "regulatory" because EFTS full-text search returns
+# broad results that need pre-screening, unlike targeted FDA feeds.
 KEYWORD_THRESHOLDS = {
     "newswire": 1,   # Google News feeds are pre-targeted but still apply one match
-    "regulatory": 0, # All FDA/EDGAR items go straight to LLM
+    "regulatory": 0, # All FDA items go straight to LLM (small, targeted feeds)
     "trade": 0,      # All trade items go straight to LLM
     "broad": 2,      # Endpoints/STAT need 2 matches given volume
+    "edgar": 2,      # EDGAR 8-Ks need 2 keyword matches after SIC filtering
 }
 
 # --- LLM Settings (Gemini) ---------------------------------------------------
