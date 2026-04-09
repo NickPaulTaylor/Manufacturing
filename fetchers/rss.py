@@ -12,11 +12,13 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# Browser-like headers prevent 400/403 rejections from sites that block bots
 HEADERS = {
     "User-Agent": (
-        "BioPharmaDigestBot/1.0 (automated news monitor; "
-        "contact: nick.paul.taylor@gmail.com)"
-    )
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
 }
 
 

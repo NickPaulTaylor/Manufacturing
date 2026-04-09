@@ -27,20 +27,20 @@ RSS_SOURCES = [
         "url": "https://www.businesswire.com/rss/home/?rss=G7&rssid=21",
         "type": "newswire",
     },
-    # FDA — correct paths as of 2025
+    # FDA — confirmed working URLs
     {
-        "name": "FDA Press Announcements",
-        "url": "https://www.fda.gov/about-fda/stay-informed/rss-feeds/press-announcements/rss.xml",
+        "name": "FDA Press Releases",
+        "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml",
         "type": "regulatory",
     },
     {
-        "name": "FDA Warning Letters",
-        "url": "https://www.fda.gov/about-fda/stay-informed/rss-feeds/warning-letters/rss.xml",
+        "name": "FDA Recalls",
+        "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/food-safety-recalls/rss.xml",
         "type": "regulatory",
     },
     {
-        "name": "FDA MedWatch Safety Alerts",
-        "url": "https://www.fda.gov/about-fda/stay-informed/rss-feeds/medwatch-safety-alerts/rss.xml",
+        "name": "FDA Criminal Investigations",
+        "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/oci-press-releases/rss.xml",
         "type": "regulatory",
     },
     # Trade publications — only open feeds included (403-blocked sites removed)
@@ -200,7 +200,7 @@ KEYWORD_THRESHOLDS = {
 }
 
 # --- LLM Settings (Gemini) ---------------------------------------------------
-GEMINI_MODEL = "gemini-2.0-flash-lite"
+GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_BATCH_SIZE = 20       # Articles per LLM call
 GEMINI_RPM_LIMIT = 30        # Free tier: requests per minute
