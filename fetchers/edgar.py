@@ -1,25 +1,29 @@
 """
 fetchers/edgar.py — Fetch recent pharma/biotech 8-K filings from SEC EDGAR.
 
-Uses the EDGAR full-text search API (EFTS) with plain keyword queries.
-The sics: filter syntax does not work in EFTS — instead we search for
-manufacturing-specific terms and let the keyword filter handle relevance.
+Uses the EDGAR full-text search API (EFTS) with targeted keyword queries,
+then post-filters by SIC code using the SEC submissions API to ensure
+only pharmaceutical/biotech filers are included.
 
-Docs: https://efts.sec.gov/LATEST/search-index (no API key required)
+Docs:
+  EFTS:        https://efts.sec.gov/LATEST/search-index (no API key required)
+  Submissions: https://data.sec.gov/submissions/ (no API key required)
 """
 
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
 
-from config import EDGAR_LOOKBACK_HOURS
+from config import EDGAR_LOOKBACK_HOURS, PHARMA_SIC_CODES
 
 logger = logging.getLogger(__name__)
 
 EFTS_URL = "https://efts.sec.gov/LATEST/search-index"
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 
 HEADERS = {
     # SEC requires a descriptive User-Agent with contact info
@@ -27,7 +31,13 @@ HEADERS = {
     "Accept-Encoding": "gzip, deflate",
 }
 
-# Targeted manufacturing terms to search for in 8-K text
+# ---------------------------------------------------------------------------
+# Search terms — kept narrow to avoid matching boilerplate legal language in
+# non-pharma 8-Ks.  Broad terms like "warning letter", "consent decree", and
+# "cGMP" were removed because they appear as standard risk-factor language in
+# filings from every industry.  SIC post-filtering (below) further ensures
+# only pharma/biotech filers survive.
+# ---------------------------------------------------------------------------
 EDGAR_SEARCH_TERMS = [
     "pharmaceutical manufacturing",
     "biologics manufacturing",
@@ -35,42 +45,71 @@ EDGAR_SEARCH_TERMS = [
     "CMO agreement",
     "manufacturing facility",
     "drug shortage",
-    "consent decree",
-    "warning letter",
-    "cGMP",
     "fill-finish",
     "aseptic manufacturing",
+    "GMP remediation",
+    "FDA warning letter" ,       # more specific than bare "warning letter"
+    "FDA consent decree",        # more specific than bare "consent decree"
 ]
 
+# Prefixes that identify pharma SIC codes (first 4 chars of each SIC string)
+_PHARMA_SIC_PREFIXES = tuple(code[:4] for code in PHARMA_SIC_CODES)
+
+# Cache: CIK → (sic_code_str | None).  Shared across all search terms within
+# a single pipeline run so we don't re-fetch the same company repeatedly.
+_sic_cache: dict[str, Optional[str]] = {}
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
 def fetch_edgar_filings() -> list[dict]:
     """
-    Fetch recent 8-K filings mentioning manufacturing terms.
-    Returns normalised article dicts.
+    Fetch recent 8-K filings mentioning manufacturing terms, filtered to
+    pharma/biotech filers by SIC code.  Returns normalised article dicts.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=EDGAR_LOOKBACK_HOURS)
     date_str = cutoff.strftime("%Y-%m-%d")
 
-    articles = []
-    seen_accessions = set()
+    articles: list[dict] = []
+    seen_accessions: set[str] = set()
+    _sic_cache.clear()
 
     for term in EDGAR_SEARCH_TERMS:
-        results = _search_efts(term, date_str)
-        for hit in results:
+        hits = _search_efts(term, date_str)
+        for hit in hits:
             accession = hit.get("_id", "")
             if not accession or accession in seen_accessions:
                 continue
             seen_accessions.add(accession)
 
-            article = _hit_to_article(hit)
+            # --- SIC post-filter ------------------------------------------
+            cik = _extract_cik(hit)
+            if not cik:
+                continue
+            sic = _lookup_sic(cik)
+            if not sic or not sic.startswith(_PHARMA_SIC_PREFIXES):
+                continue
+            # --------------------------------------------------------------
+
+            article = _hit_to_article(hit, sic)
             if article:
                 articles.append(article)
 
         time.sleep(0.5)  # Polite delay between EDGAR requests
 
-    logger.info(f"Fetched {len(articles)} EDGAR 8-K filings")
+    logger.info(
+        f"Fetched {len(articles)} EDGAR 8-K filings "
+        f"(from {len(seen_accessions)} unique accessions, "
+        f"{len(_sic_cache)} unique CIKs checked)"
+    )
     return articles
 
+
+# ---------------------------------------------------------------------------
+# EFTS search
+# ---------------------------------------------------------------------------
 
 def _search_efts(query_term: str, date_from: str) -> list[dict]:
     """Query the EDGAR EFTS search API."""
@@ -92,19 +131,60 @@ def _search_efts(query_term: str, date_from: str) -> list[dict]:
         return []
 
 
-def _hit_to_article(hit: dict) -> Optional[dict]:
-    """Convert an EFTS search hit to a normalised article dict."""
+# ---------------------------------------------------------------------------
+# SIC lookup via SEC submissions API
+# ---------------------------------------------------------------------------
+
+def _extract_cik(hit: dict) -> Optional[str]:
+    """Pull CIK from an EFTS hit.  The accession number starts with the
+    zero-padded CIK (first 10 digits)."""
+    accession = hit.get("_id", "")
+    if len(accession) < 10:
+        return None
+    cik_raw = accession.split("-")[0] if "-" in accession else accession[:10]
+    return cik_raw.lstrip("0") or None
+
+
+def _lookup_sic(cik: str) -> Optional[str]:
+    """Return the 4-digit SIC code string for a CIK, using a cache to avoid
+    redundant HTTP calls.  Returns None on any failure."""
+    if cik in _sic_cache:
+        return _sic_cache[cik]
+
+    padded = cik.zfill(10)
+    url = SUBMISSIONS_URL.format(cik=padded)
+
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        sic = data.get("sic", "")
+        _sic_cache[cik] = sic or None
+        time.sleep(0.12)  # Stay under 10 req/s SEC rate limit
+        return _sic_cache[cik]
+    except Exception as exc:
+        logger.debug(f"SIC lookup failed for CIK {cik}: {exc}")
+        _sic_cache[cik] = None
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Hit → article conversion
+# ---------------------------------------------------------------------------
+
+def _hit_to_article(hit: dict, sic: str) -> Optional[dict]:
+    """Convert an EFTS search hit to a normalised article dict, collecting
+    *all* highlight snippets to give the LLM meaningful context."""
     source = hit.get("_source", {})
     entity = source.get("entity_name", "Unknown Company")
     file_date = source.get("file_date", "")
-    accession = hit.get("_id", "")  # Format: 0001234567-26-000001
+    accession = hit.get("_id", "")
 
     if not accession:
         return None
 
     # Build the EDGAR filing viewer URL
     accession_nodash = accession.replace("-", "")
-    # Extract CIK from the accession number (first 10 digits)
     cik = accession_nodash[:10].lstrip("0")
     filing_url = (
         f"https://www.sec.gov/Archives/edgar/data/{cik}/"
@@ -120,19 +200,29 @@ def _hit_to_article(hit: dict) -> Optional[dict]:
         except Exception:
             pass
 
-    # Extract highlight snippets if available
+    # Collect ALL highlight snippets (not just the first one) and clean HTML
+    # tags that EFTS wraps around matched terms.
     highlights = hit.get("highlight", {})
-    snippet = ""
+    snippets: list[str] = []
     for field_hits in highlights.values():
-        if field_hits:
-            snippet = field_hits[0][:300]
-            break
+        for fragment in (field_hits or []):
+            clean = re.sub(r"</?[^>]+>", "", fragment).strip()
+            if clean and clean not in snippets:
+                snippets.append(clean)
+    snippet_text = " … ".join(snippets[:6])[:1500]  # Cap at ~1500 chars
+
+    # Build a richer summary so the LLM has enough to judge relevance
+    summary_parts = [
+        f"SEC 8-K filing by {entity} (SIC {sic}) on {file_date}.",
+    ]
+    if snippet_text:
+        summary_parts.append(f"Excerpts: {snippet_text}")
 
     return {
         "url": filing_url,
         "title": f"SEC 8-K Filing: {entity}",
-        "summary": f"8-K filing by {entity} on {file_date}. {snippet}",
+        "summary": " ".join(summary_parts),
         "published_dt": published_dt,
         "source_name": "SEC EDGAR (8-K)",
-        "source_type": "regulatory",
+        "source_type": "edgar",  # Distinct type → its own keyword threshold
     }
