@@ -1,7 +1,5 @@
 """
 pipeline/llm.py — Batch LLM scoring via Google Gemini (google-genai SDK).
-
-Uses the same SDK and model as the working monitor script to avoid 429 errors.
 """
 
 import json
@@ -20,33 +18,53 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a senior journalist and editor at a biopharma trade publication
-specialising in pharmaceutical and biopharmaceutical manufacturing, supply chain, and
-regulatory compliance. Your job is to assess incoming news items and decide which are
-worth covering.
+SYSTEM_PROMPT = """You are a senior editor at a trade publication covering pharmaceutical and
+biopharmaceutical MANUFACTURING. Your job is to filter news strictly for manufacturing relevance.
 
-You will receive a JSON array of news items. For each item, return a JSON array with
-the same number of objects, each containing:
-  - "index": the item's index (integer, 0-based)
-  - "score": relevance score from 1 to 5 where:
-      5 = Must cover: major regulatory action, significant capacity/M&A news, supply crisis
-      4 = Strong story: notable facility news, CDMO deal, warning letter, expansion
-      3 = Worth monitoring: industry trend, minor facility update, relevant partnership
-      2 = Marginal: tangentially related, likely clinical/commercial not manufacturing
-      1 = Not relevant: no manufacturing angle
+You will receive a JSON array of news items. For each, return a JSON array with:
+  - "index": integer (0-based)
+  - "score": 1-5 (defined below)
   - "category": one of ["regulatory", "capacity", "supply_chain", "MA", "partnership",
                          "quality", "technology", "workforce", "other"]
-  - "note": one sentence (max 25 words) on why this is or isn't newsworthy from a
-            manufacturing perspective
+  - "note": one sentence, max 20 words, stating the specific manufacturing fact — not why
+            it might be relevant, the actual fact that makes it relevant.
+
+SCORING — be strict:
+  5 = Direct manufacturing news: FDA warning letter or consent decree at a pharma/biotech
+      facility; plant closure or shutdown; drug shortage caused by manufacturing failure;
+      new manufacturing site announced or acquired; CDMO/CMO wins or loses a major contract.
+  4 = Clear manufacturing story: facility expansion or investment with named site; capacity
+      announcement; GMP compliance remediation update; manufacturing partnership with named
+      parties and explicit scope; supply disruption with identified manufacturing cause;
+      reshoring or nearshoring of specific production lines.
+  3 = Manufacturing-adjacent with explicit evidence: CDMO/CMO M&A where manufacturing
+      assets are explicitly named; drug shortage where cause is unclear; tariff or trade
+      policy that explicitly names manufacturing operations being affected; bioprocessing
+      technology at commercial scale with a named company deploying it.
+  2 = Weak or speculative link: M&A or deals where manufacturing implications are implied
+      but not stated in the article; regulatory approvals with no facility or supply angle.
+  1 = Not relevant — score 1 for ALL of the following, regardless of any manufacturing
+      mention in the summary:
+        - Medical devices and medtech (510k, PMA, CE mark)
+        - Clinical trial results or drug efficacy data
+        - Drug pricing, reimbursement, or commercial strategy
+        - Marketing or promotional compliance
+        - Executive appointments, departures, or leadership changes
+        - Basic research, drug discovery, or target identification
+        - AI tools for drug development or computational biology
+        - Company earnings, financial results, or investor news
+        - Policy debates or government negotiations without named manufacturing actions
+        - Regulatory approvals (drug or device) unless the approval explicitly triggers
+          a named manufacturing scale-up, site change, or capacity investment
+
+CRITICAL RULE: If you are constructing a manufacturing angle rather than directly reporting
+one that is explicitly present in the title or summary, score it 1 or 2. Do not infer.
+Do not speculate. The manufacturing relevance must be stated in the article itself.
 
 Return ONLY a valid JSON array. No preamble, no markdown, no backticks."""
 
 
 def score_articles(articles: list[dict]) -> list[dict]:
-    """
-    Score all articles using Gemini in batches.
-    Returns only articles scoring >= GEMINI_MIN_SCORE, with score/category/note added.
-    """
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise EnvironmentError("GEMINI_API_KEY environment variable not set")
@@ -79,7 +97,6 @@ def score_articles(articles: list[dict]) -> list[dict]:
 
 
 def _score_batch(batch: list[dict], client) -> list[dict]:
-    """Send one batch to Gemini via the SDK with exponential backoff on failure."""
     items = [
         {
             "index": i,

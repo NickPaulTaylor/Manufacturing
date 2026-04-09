@@ -4,38 +4,31 @@
 
 # --- RSS Sources -------------------------------------------------------------
 RSS_SOURCES = [
-    # Newswires
-    # GlobeNewswire industry feeds use /RssFeed/industrycode/NUMBER-Name format
+    # Newswires — correct URLs confirmed working in RSS readers
+    {
+        "name": "BusinessWire (Pharmaceutical)",
+        "url": "https://feeds.businesswire.com/BW/Pharmaceutical-rss",
+        "type": "newswire",
+    },
+    {
+        "name": "BusinessWire (Biotechnology)",
+        "url": "https://feeds.businesswire.com/BW/Biotechnology-rss",
+        "type": "newswire",
+    },
     {
         "name": "GlobeNewswire (Pharma)",
-        "url": "https://www.globenewswire.com/RssFeed/industrycode/37-Pharmaceuticals/feedTitle/GlobeNewswire%20-%20Pharmaceuticals",
+        "url": "https://www.globenewswire.com/RssFeed/industry/4573",
         "type": "newswire",
     },
     {
         "name": "GlobeNewswire (Biotech)",
-        "url": "https://www.globenewswire.com/RssFeed/industrycode/6-Biotechnology/feedTitle/GlobeNewswire%20-%20Biotechnology",
+        "url": "https://www.globenewswire.com/RssFeed/industry/4577",
         "type": "newswire",
     },
-    # BusinessWire industry RSS — correct URL format per their feed docs
-    {
-        "name": "BusinessWire (Pharma)",
-        "url": "https://www.businesswire.com/rss/home/?rss=G7&rssid=20",
-        "type": "newswire",
-    },
-    {
-        "name": "BusinessWire (Biotech)",
-        "url": "https://www.businesswire.com/rss/home/?rss=G7&rssid=21",
-        "type": "newswire",
-    },
-    # FDA — confirmed working URLs
+    # FDA RSS feeds
     {
         "name": "FDA Press Releases",
         "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml",
-        "type": "regulatory",
-    },
-    {
-        "name": "FDA Recalls",
-        "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/food-safety-recalls/rss.xml",
         "type": "regulatory",
     },
     {
@@ -43,6 +36,8 @@ RSS_SOURCES = [
         "url": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/oci-press-releases/rss.xml",
         "type": "regulatory",
     },
+    # NOTE: openFDA API (fetchers/openfda.py) supplements these with structured
+    # enforcement/recall data not available via RSS.
     # Trade publications — only open feeds included (403-blocked sites removed)
     {
         "name": "BioPharma Dive",
@@ -193,10 +188,10 @@ KEYWORDS = [
 
 # Minimum keyword matches required by source type
 KEYWORD_THRESHOLDS = {
-    "newswire": 1,
-    "regulatory": 0,  # All FDA items pass through to LLM
-    "trade": 0,       # All trade items pass through to LLM
-    "broad": 2,       # Endpoints/STAT need 2 matches given volume
+    "newswire": 1,   # Google News feeds are pre-targeted but still apply one match
+    "regulatory": 0, # All FDA/EDGAR items go straight to LLM
+    "trade": 0,      # All trade items go straight to LLM
+    "broad": 2,      # Endpoints/STAT need 2 matches given volume
 }
 
 # --- LLM Settings (Gemini) ---------------------------------------------------
@@ -205,7 +200,7 @@ GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_BATCH_SIZE = 20       # Articles per LLM call
 GEMINI_RPM_LIMIT = 30        # Free tier: requests per minute
 GEMINI_DELAY_SECONDS = 10    # Pause between batches to stay below free-tier rate limit
-GEMINI_MIN_SCORE = 3         # Articles scoring below this are excluded (1-5 scale)
+GEMINI_MIN_SCORE = 4         # Articles scoring below this are excluded (1-5 scale)
 
 # --- Email Settings ----------------------------------------------------------
 EMAIL_RECIPIENT = "nick.paul.taylor@gmail.com"

@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from config import RSS_SOURCES, DIGEST_DIR, STATE_FILE
 from fetchers.rss import fetch_all_feeds
 from fetchers.edgar import fetch_edgar_filings
+from fetchers.openfda import fetch_fda_enforcement
 from pipeline.filter import filter_articles
 from pipeline.dedup import load_state, save_state, deduplicate
 from pipeline.llm import score_articles
@@ -48,7 +49,10 @@ def run():
     logger.info("Fetching SEC EDGAR filings...")
     edgar_articles = fetch_edgar_filings()
 
-    all_articles = rss_articles + edgar_articles
+    logger.info("Fetching FDA enforcement actions...")
+    fda_articles = fetch_fda_enforcement()
+
+    all_articles = rss_articles + edgar_articles + fda_articles
     logger.info(f"Total fetched: {len(all_articles)} articles")
 
     # 3. Keyword filter
