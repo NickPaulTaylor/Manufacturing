@@ -13,7 +13,7 @@ Usage:
     python edgar_debug.py --term "CDMO"     # Test a single search term
     python edgar_debug.py --hours 72        # Look back further
 
-Requires: pip install requests tabulate
+Requires: pip install requests
 No API keys needed — uses free SEC EDGAR endpoints.
 """
 
@@ -91,42 +91,63 @@ _KW_PATTERNS = [
 
 _sic_cache: dict[str, Optional[str]] = {}
 _sic_name_cache: dict[str, str] = {}
+_company_name_cache: dict[str, str] = {}
 
 
-def search_efts(query_term: str, date_from: str) -> list[dict]:
-    params = {
+def search_efts(query_term: str, date_from: str, date_to: str) -> list[dict]:
+    """Query EFTS using POST with JSON body (required by SEC API)."""
+    payload = {
         "q": f'"{query_term}"',
         "forms": "8-K",
         "dateRange": "custom",
         "startdt": date_from,
+        "enddt": date_to,
     }
     try:
-        resp = requests.get(EFTS_URL, params=params, headers=HEADERS, timeout=20)
+        resp = requests.post(EFTS_URL, json=payload, headers=HEADERS, timeout=20)
         resp.raise_for_status()
         data = resp.json()
-        total = data.get("hits", {}).get("total", {})
+        total_info = data.get("hits", {}).get("total", {})
+        total_val = total_info.get("value", "?")
+        total_rel = total_info.get("relation", "")
         hits = data.get("hits", {}).get("hits", [])
+        if total_rel == "gte":
+            print(f"    (API reports ≥{total_val} total matches, returning first {len(hits)})")
         return hits
     except Exception as exc:
         print(f"  ⚠ EFTS query failed: {exc}")
         return []
 
 
+def extract_accession(hit: dict) -> str:
+    """EFTS _id is 'accession:filename' — return just the accession part."""
+    raw_id = hit.get("_id", "")
+    return raw_id.split(":")[0] if ":" in raw_id else raw_id
+
+
 def extract_cik(hit: dict) -> Optional[str]:
-    accession = hit.get("_id", "")
-    if "-" in accession:
-        cik_raw = accession.split("-")[0]
-    elif len(accession) >= 10:
-        cik_raw = accession[:10]
-    else:
-        return None
-    return cik_raw.lstrip("0") or None
+    """Pull CIK from the _source dict."""
+    source = hit.get("_source", {})
+    ciks = source.get("ciks", [])
+    if ciks:
+        return str(ciks[0]).lstrip("0") or None
+    return None
 
 
-def lookup_sic(cik: str) -> tuple[Optional[str], str]:
-    """Returns (sic_code, sic_description)."""
+def extract_entity(hit: dict) -> str:
+    """Pull company name from _source."""
+    source = hit.get("_source", {})
+    return (
+        source.get("entity_name")
+        or (source.get("display_names") or [None])[0]
+        or "Unknown"
+    )
+
+
+def lookup_sic(cik: str) -> tuple[Optional[str], str, str]:
+    """Returns (sic_code, sic_description, company_name)."""
     if cik in _sic_cache:
-        return _sic_cache[cik], _sic_name_cache.get(cik, "")
+        return _sic_cache[cik], _sic_name_cache.get(cik, ""), _company_name_cache.get(cik, "")
 
     padded = cik.zfill(10)
     url = SUBMISSIONS_URL.format(cik=padded)
@@ -136,14 +157,17 @@ def lookup_sic(cik: str) -> tuple[Optional[str], str]:
         data = resp.json()
         sic = data.get("sic", "")
         sic_desc = data.get("sicDescription", "")
+        name = data.get("name", "")
         _sic_cache[cik] = sic or None
         _sic_name_cache[cik] = sic_desc
+        _company_name_cache[cik] = name
         time.sleep(0.12)
-        return _sic_cache[cik], sic_desc
+        return _sic_cache[cik], sic_desc, name
     except Exception as exc:
         _sic_cache[cik] = None
         _sic_name_cache[cik] = ""
-        return None, ""
+        _company_name_cache[cik] = ""
+        return None, "", ""
 
 
 def get_snippets(hit: dict) -> str:
@@ -172,6 +196,7 @@ def count_keywords(text: str) -> tuple[int, list[str]]:
 def run_diagnostic(args):
     cutoff = datetime.now(timezone.utc) - timedelta(hours=args.hours)
     date_str = cutoff.strftime("%Y-%m-%d")
+    end_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     terms = [args.term] if args.term else EDGAR_SEARCH_TERMS
 
@@ -184,6 +209,7 @@ def run_diagnostic(args):
     kw_threshold = args.threshold if args.threshold is not None else 2
     print(f"Keyword threshold: {kw_threshold}{'  (disabled)' if args.raw else ''}")
     print(f"Pharma SICs:    {', '.join(PHARMA_SIC_CODES)}")
+    print(f"HTTP method:    POST (JSON body)")
     print()
 
     # ── Stage 1: Raw EFTS fetch ──────────────────────────────────────────
@@ -193,10 +219,10 @@ def run_diagnostic(args):
 
     print("─── STAGE 1: EFTS Search ───")
     for term in terms:
-        raw_hits = search_efts(term, date_str)
+        raw_hits = search_efts(term, date_str, end_str)
         new_count = 0
         for hit in raw_hits:
-            acc = hit.get("_id", "")
+            acc = extract_accession(hit)
             if acc and acc not in seen_accessions:
                 seen_accessions.add(acc)
                 hit["_matched_term"] = term
@@ -208,11 +234,38 @@ def run_diagnostic(args):
         time.sleep(0.5)
 
     print(f"\n  Total unique filings from EFTS: {len(all_hits)}")
+
+    # Show date distribution of results
+    date_counter: Counter = Counter()
+    for hit in all_hits:
+        fd = hit.get("_source", {}).get("file_date", "")
+        date_counter[fd[:7] if fd else "NONE"] += 1
+    if date_counter:
+        print(f"\n  Filing date distribution:")
+        for d, c in sorted(date_counter.items()):
+            print(f"    {d}: {c}")
     print()
 
     if not all_hits:
         print("No results. Nothing to diagnose.")
         return
+
+    # Show a sample raw hit for debugging
+    print("  Sample raw hit structure:")
+    sample = all_hits[0]
+    sample_source = sample.get("_source", {})
+    print(f"    _id:            {sample.get('_id', 'MISSING')}")
+    print(f"    _source keys:   {sorted(sample_source.keys())}")
+    print(f"    entity_name:    {sample_source.get('entity_name', 'MISSING')}")
+    print(f"    display_names:  {sample_source.get('display_names', 'MISSING')}")
+    print(f"    ciks:           {sample_source.get('ciks', 'MISSING')}")
+    print(f"    file_date:      {sample_source.get('file_date', 'MISSING')}")
+    print(f"    file_type:      {sample_source.get('file_type', 'MISSING')}")
+    print(f"    highlight keys: {sorted(sample.get('highlight', {}).keys())}")
+    snippet = get_snippets(sample)
+    if snippet:
+        print(f"    snippet:        {snippet[:200]}...")
+    print()
 
     # ── Stage 2: SIC lookup + filter ─────────────────────────────────────
     print("─── STAGE 2: SIC Code Filtering ───")
@@ -220,8 +273,14 @@ def run_diagnostic(args):
     sic_pass: list[dict] = []
     sic_fail: list[dict] = []
     sic_counter: Counter = Counter()
+    no_cik_count = 0
 
-    unique_ciks = set(extract_cik(h) for h in all_hits) - {None}
+    unique_ciks = set()
+    for h in all_hits:
+        c = extract_cik(h)
+        if c:
+            unique_ciks.add(c)
+
     print(f"  Unique CIKs to look up: {len(unique_ciks)}")
 
     if not args.raw and not args.no_sic:
@@ -233,16 +292,29 @@ def run_diagnostic(args):
 
         for hit in all_hits:
             cik = extract_cik(hit)
-            sic, sic_desc = (_sic_cache.get(cik), _sic_name_cache.get(cik, "")) if cik else (None, "")
+            if not cik:
+                no_cik_count += 1
+                sic_fail.append(hit)
+                continue
+
+            sic, sic_desc, comp_name = (
+                _sic_cache.get(cik),
+                _sic_name_cache.get(cik, ""),
+                _company_name_cache.get(cik, ""),
+            )
             hit["_sic"] = sic
             hit["_sic_desc"] = sic_desc
-            sic_counter[f"{sic} ({sic_desc})" if sic else "UNKNOWN"] += 1
+            hit["_company"] = comp_name or extract_entity(hit)
+            label = f"{sic} ({sic_desc})" if sic else "UNKNOWN"
+            sic_counter[label] += 1
 
             if sic and sic.startswith(_PHARMA_SIC_PREFIXES):
                 sic_pass.append(hit)
             else:
                 sic_fail.append(hit)
 
+        if no_cik_count:
+            print(f"\n  Hits with no CIK (dropped): {no_cik_count}")
         print(f"\n  SIC distribution (top 20):")
         for sic_label, count in sic_counter.most_common(20):
             is_pharma = any(sic_label.startswith(p) for p in _PHARMA_SIC_PREFIXES)
@@ -256,6 +328,7 @@ def run_diagnostic(args):
         for hit in all_hits:
             hit["_sic"] = "N/A"
             hit["_sic_desc"] = "skipped"
+            hit["_company"] = extract_entity(hit)
         print("  (SIC filtering disabled)")
 
     print()
@@ -268,12 +341,15 @@ def run_diagnostic(args):
 
     if not args.raw:
         for hit in sic_pass:
-            source = hit.get("_source", {})
-            entity = source.get("entity_name", "Unknown")
-            file_date = source.get("file_date", "")
+            entity = hit.get("_company", extract_entity(hit))
+            file_date = hit.get("_source", {}).get("file_date", "")
             sic = hit.get("_sic", "")
             snippets = get_snippets(hit)
-            text = f"SEC 8-K Filing: {entity} 8-K filing by {entity} (SIC {sic}) on {file_date}. Excerpts: {snippets}"
+            text = (
+                f"SEC 8-K Filing: {entity} "
+                f"8-K filing by {entity} (SIC {sic}) on {file_date}. "
+                f"Excerpts: {snippets}"
+            )
             count, matched = count_keywords(text)
             hit["_kw_count"] = count
             hit["_kw_matched"] = matched
@@ -289,9 +365,8 @@ def run_diagnostic(args):
         if kw_fail:
             print(f"\n  Sample keyword rejections (up to 10):")
             for hit in kw_fail[:10]:
-                source = hit.get("_source", {})
-                entity = source.get("entity_name", "?")
-                print(f"    • {entity} — {hit.get('_kw_count', 0)} kw matches: {hit.get('_kw_matched', [])}")
+                entity = hit.get("_company", "?")
+                print(f"    • {entity} — {hit.get('_kw_count', 0)} kw: {hit.get('_kw_matched', [])}")
                 snip = get_snippets(hit)[:120]
                 if snip:
                     print(f"      snippet: {snip}…")
@@ -306,10 +381,9 @@ def run_diagnostic(args):
     print(f"  Total: {len(kw_pass)} filings\n")
 
     for i, hit in enumerate(kw_pass):
-        source = hit.get("_source", {})
-        entity = source.get("entity_name", "?")
-        file_date = source.get("file_date", "?")
-        accession = hit.get("_id", "?")
+        entity = hit.get("_company", extract_entity(hit))
+        file_date = hit.get("_source", {}).get("file_date", "?")
+        accession = extract_accession(hit)
         sic = hit.get("_sic", "?")
         sic_desc = hit.get("_sic_desc", "")
         kw_count = hit.get("_kw_count", "?")
@@ -323,7 +397,6 @@ def run_diagnostic(args):
         print(f"      Matched term: \"{term}\"")
         print(f"      Keyword matches: {kw_count} — {kw_matched}")
         if snippets:
-            # Show first 300 chars of snippets
             display = snippets[:300]
             if len(snippets) > 300:
                 display += "…"
@@ -351,8 +424,8 @@ def run_diagnostic(args):
         for hit in kw_pass:
             source = hit.get("_source", {})
             output.append({
-                "accession": hit.get("_id"),
-                "entity": source.get("entity_name"),
+                "accession": extract_accession(hit),
+                "entity": hit.get("_company", extract_entity(hit)),
                 "file_date": source.get("file_date"),
                 "sic": hit.get("_sic"),
                 "sic_desc": hit.get("_sic_desc"),
