@@ -75,24 +75,13 @@ KEYWORDS = [
 EFTS_URL = "https://efts.sec.gov/LATEST/search-index"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 
-# Browser-like headers required for the EFTS POST endpoint.
+# Simple headers — GET works, POST returns 403 from non-browser clients.
 EFTS_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "Accept-Encoding": "gzip, deflate",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Origin": "https://efts.sec.gov",
-    "Referer": "https://efts.sec.gov/LATEST/search-index",
-}
-
-# Simple headers for data.sec.gov (SEC asks for descriptive User-Agent).
-SUBMISSIONS_HEADERS = {
     "User-Agent": "BioPharmaDigest nick.paul.taylor@gmail.com",
+    "Accept": "application/json",
     "Accept-Encoding": "gzip, deflate",
 }
+SUBMISSIONS_HEADERS = EFTS_HEADERS
 
 _PHARMA_SIC_PREFIXES = tuple(code[:4] for code in PHARMA_SIC_CODES)
 _KW_PATTERNS = [
@@ -109,17 +98,14 @@ _sic_name_cache: dict[str, str] = {}
 _company_name_cache: dict[str, str] = {}
 
 
-def search_efts(query_term: str, date_from: str, date_to: str) -> list[dict]:
-    """Query EFTS using POST with JSON body (required by SEC API)."""
-    payload = {
+def search_efts(query_term: str) -> list[dict]:
+    """Query EFTS using GET (POST returns 403 from non-browser clients)."""
+    params = {
         "q": f'"{query_term}"',
         "forms": "8-K",
-        "dateRange": "custom",
-        "startdt": date_from,
-        "enddt": date_to,
     }
     try:
-        resp = requests.post(EFTS_URL, json=payload, headers=EFTS_HEADERS, timeout=20)
+        resp = requests.get(EFTS_URL, params=params, headers=EFTS_HEADERS, timeout=20)
         resp.raise_for_status()
         data = resp.json()
         total_info = data.get("hits", {}).get("total", {})
@@ -211,7 +197,6 @@ def count_keywords(text: str) -> tuple[int, list[str]]:
 def run_diagnostic(args):
     cutoff = datetime.now(timezone.utc) - timedelta(hours=args.hours)
     date_str = cutoff.strftime("%Y-%m-%d")
-    end_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     terms = [args.term] if args.term else EDGAR_SEARCH_TERMS
 
@@ -224,31 +209,39 @@ def run_diagnostic(args):
     kw_threshold = args.threshold if args.threshold is not None else 2
     print(f"Keyword threshold: {kw_threshold}{'  (disabled)' if args.raw else ''}")
     print(f"Pharma SICs:    {', '.join(PHARMA_SIC_CODES)}")
-    print(f"HTTP method:    POST (JSON body)")
+    print(f"HTTP method:    GET (date filtering is client-side)")
     print()
 
     # ── Stage 1: Raw EFTS fetch ──────────────────────────────────────────
     all_hits: list[dict] = []
     hits_by_term: dict[str, int] = {}
     seen_accessions: set[str] = set()
+    date_skipped = 0
 
-    print("─── STAGE 1: EFTS Search ───")
+    print("─── STAGE 1: EFTS Search + Client-Side Date Filter ───")
     for term in terms:
-        raw_hits = search_efts(term, date_str, end_str)
+        raw_hits = search_efts(term)
         new_count = 0
         for hit in raw_hits:
             acc = extract_accession(hit)
             if acc and acc not in seen_accessions:
                 seen_accessions.add(acc)
+
+                # Client-side date filter (EFTS GET ignores date params)
+                fd = hit.get("_source", {}).get("file_date", "")
+                if fd and fd < date_str:
+                    date_skipped += 1
+                    continue
+
                 hit["_matched_term"] = term
                 all_hits.append(hit)
                 new_count += 1
         hits_by_term[term] = new_count
         total_raw = len(raw_hits)
-        print(f'  "{term}": {total_raw} raw hits, {new_count} new unique')
+        print(f'  "{term}": {total_raw} raw hits, {new_count} new unique (in date range)')
         time.sleep(0.5)
 
-    print(f"\n  Total unique filings from EFTS: {len(all_hits)}")
+    print(f"\n  Total unique filings from EFTS: {len(all_hits)} in range, {date_skipped} skipped (too old)")
 
     # Show date distribution of results
     date_counter: Counter = Counter()
