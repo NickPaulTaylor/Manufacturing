@@ -74,7 +74,22 @@ KEYWORDS = [
 
 EFTS_URL = "https://efts.sec.gov/LATEST/search-index"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
-HEADERS = {
+
+# Browser-like headers required for the EFTS POST endpoint.
+EFTS_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://efts.sec.gov",
+    "Referer": "https://efts.sec.gov/LATEST/search-index",
+}
+
+# Simple headers for data.sec.gov (SEC asks for descriptive User-Agent).
+SUBMISSIONS_HEADERS = {
     "User-Agent": "BioPharmaDigest nick.paul.taylor@gmail.com",
     "Accept-Encoding": "gzip, deflate",
 }
@@ -104,7 +119,7 @@ def search_efts(query_term: str, date_from: str, date_to: str) -> list[dict]:
         "enddt": date_to,
     }
     try:
-        resp = requests.post(EFTS_URL, json=payload, headers=HEADERS, timeout=20)
+        resp = requests.post(EFTS_URL, json=payload, headers=EFTS_HEADERS, timeout=20)
         resp.raise_for_status()
         data = resp.json()
         total_info = data.get("hits", {}).get("total", {})
@@ -152,7 +167,7 @@ def lookup_sic(cik: str) -> tuple[Optional[str], str, str]:
     padded = cik.zfill(10)
     url = SUBMISSIONS_URL.format(cik=padded)
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(url, headers=SUBMISSIONS_HEADERS, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         sic = data.get("sic", "")
