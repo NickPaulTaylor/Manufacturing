@@ -1,0 +1,84 @@
+name: EDGAR Fetcher Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Lookback hours"
+        required: false
+        default: "26"
+      term:
+        description: "Single search term to test (leave blank for all)"
+        required: false
+        default: ""
+      mode:
+        description: "Filtering mode"
+        required: false
+        default: "full"
+        type: choice
+        options:
+          - full          # SIC + keyword filtering (production behaviour)
+          - no-sic        # Skip SIC, keep keyword filter
+          - raw           # No filtering at all — raw EFTS output
+      threshold:
+        description: "Keyword threshold override (leave blank for default of 2)"
+        required: false
+        default: ""
+      json_output:
+        description: "Save survivors to JSON artifact"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+jobs:
+  edgar-debug:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run EDGAR diagnostic
+        run: |
+          ARGS="--hours ${{ github.event.inputs.hours }}"
+
+          if [ "${{ github.event.inputs.mode }}" = "raw" ]; then
+            ARGS="$ARGS --raw"
+          elif [ "${{ github.event.inputs.mode }}" = "no-sic" ]; then
+            ARGS="$ARGS --no-sic"
+          fi
+
+          if [ -n "${{ github.event.inputs.term }}" ]; then
+            ARGS="$ARGS --term \"${{ github.event.inputs.term }}\""
+          fi
+
+          if [ -n "${{ github.event.inputs.threshold }}" ]; then
+            ARGS="$ARGS --threshold ${{ github.event.inputs.threshold }}"
+          fi
+
+          if [ "${{ github.event.inputs.json_output }}" = "true" ]; then
+            ARGS="$ARGS --json edgar_results.json"
+          fi
+
+          echo "Running: python edgar_debug.py $ARGS"
+          eval python edgar_debug.py $ARGS
+
+      - name: Upload JSON results
+        if: ${{ github.event.inputs.json_output == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: edgar-debug-results
+          path: edgar_results.json
+          if-no-files-found: ignore
+          retention-days: 7
